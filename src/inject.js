@@ -12,9 +12,47 @@
 
 const HTML_CLASS = 'eink-viewable-on'
 const STYLE_ID = 'eink-viewable-style'
+const SVG_WRAPPER_ID = 'eink-viewable-svg-wrapper'
+const SVG_FILTER_ID = 'eink-viewable-svg-defs'
+const IMG_FILTER_ID = 'eink-img-filter'
 const FIX_BG_CLASS = 'eink-viewable-fix-bg'
 const FIX_BORDER_CLASS = 'eink-viewable-fix-border'
 const SVG_CLASS = 'eink-viewable-svg'
+const SKIP_FILTER_CLASS = 'eink-skip-filter'
+
+// Live image filter parameters; replaced from storage on activation and
+// whenever the user moves the sliders in the options page.
+let currentImageFilter = { gamma: 0.75, brightness: 0.05, sharpness: 0.3, smallThreshold: 24 }
+
+// Build the SVG <filter> markup from a parameter object.
+//   gamma       — exponent on each channel (< 1 brightens, > 1 darkens)
+//   brightness  — additive offset (and small amplitude lift) on each channel
+//   sharpness   — side weight in a 3x3 unsharp-mask kernel; the kernel is
+//                 always normalized so its center = 1 + 4 * sharpness so
+//                 global brightness is preserved through this step.
+function buildSvgFilterMarkup(f) {
+    const amp = (1 + f.brightness).toFixed(3)
+    const exp = f.gamma.toFixed(3)
+    const off = f.brightness.toFixed(3)
+    const s = f.sharpness.toFixed(3)
+    const center = (1 + 4 * f.sharpness).toFixed(3)
+    return `
+<svg id="${SVG_FILTER_ID}" aria-hidden="true"
+     style="position:absolute;width:0;height:0;pointer-events:none;overflow:hidden"
+     xmlns="http://www.w3.org/2000/svg">
+    <filter id="${IMG_FILTER_ID}" color-interpolation-filters="sRGB">
+        <feColorMatrix type="saturate" values="0"/>
+        <feComponentTransfer>
+            <feFuncR type="gamma" amplitude="${amp}" exponent="${exp}" offset="${off}"/>
+            <feFuncG type="gamma" amplitude="${amp}" exponent="${exp}" offset="${off}"/>
+            <feFuncB type="gamma" amplitude="${amp}" exponent="${exp}" offset="${off}"/>
+        </feComponentTransfer>
+        <feConvolveMatrix order="3" preserveAlpha="true"
+            kernelMatrix="0 -${s} 0  -${s} ${center} -${s}  0 -${s} 0"/>
+    </filter>
+</svg>
+`
+}
 
 const STATIC_CSS = `
 html.${HTML_CLASS},
@@ -60,14 +98,22 @@ html.${HTML_CLASS} .${SVG_CLASS} * {
 }
 
 /* Re-enable a desaturating filter for raster media. The universal
-   filter:none above is overridden by these more-targeted selectors
-   appearing later in source order. */
-html.${HTML_CLASS} img,
-html.${HTML_CLASS} video,
-html.${HTML_CLASS} canvas,
-html.${HTML_CLASS} picture,
-html.${HTML_CLASS} svg image {
-    filter: grayscale(100%) contrast(1.05) !important;
+   filter:none rule above is overridden by these more-targeted selectors
+   appearing later in source order. We use an SVG filter (defined in the
+   injected <svg>) which gives gamma + light sharpening on top of pure
+   grayscale — much more legible on greyscale e-ink panels. */
+html.${HTML_CLASS} img:not(.${SKIP_FILTER_CLASS}),
+html.${HTML_CLASS} video:not(.${SKIP_FILTER_CLASS}),
+html.${HTML_CLASS} canvas:not(.${SKIP_FILTER_CLASS}),
+html.${HTML_CLASS} picture:not(.${SKIP_FILTER_CLASS}),
+html.${HTML_CLASS} svg image:not(.${SKIP_FILTER_CLASS}) {
+    filter: url(#${IMG_FILTER_ID}) !important;
+}
+
+/* Small icons / avatars / favicons get marked as skipped — keep their
+   original color since grayscale-then-shrink looks muddy at <24px. */
+html.${HTML_CLASS} .${SKIP_FILTER_CLASS} {
+    filter: none !important;
 }
 
 html.${HTML_CLASS} .${FIX_BG_CLASS} {
@@ -135,15 +181,65 @@ function ignoreTag(node) {
 
 const processed = new WeakSet()
 
+// Decide whether an <img>/<video>/<canvas> is small enough that we'd
+// rather leave it alone than apply the e-ink filter to it.
+function applySmallMediaSkip(media) {
+    let w = 0
+    let h = 0
+    if (media.tagName === 'IMG') {
+        w = media.naturalWidth || 0
+        h = media.naturalHeight || 0
+    }
+    if (!w || !h) {
+        const r = media.getBoundingClientRect()
+        w = Math.max(w, r.width)
+        h = Math.max(h, r.height)
+    }
+    const max = Math.max(w, h)
+    if (max > 0 && max <= currentImageFilter.smallThreshold) {
+        media.classList.add(SKIP_FILTER_CLASS)
+    } else {
+        media.classList.remove(SKIP_FILTER_CLASS)
+    }
+}
+
+function processMedia(media) {
+    if (media.tagName === 'IMG') {
+        if (media.complete && media.naturalWidth) {
+            applySmallMediaSkip(media)
+        } else {
+            const onReady = () => applySmallMediaSkip(media)
+            media.addEventListener('load', onReady, { once: true })
+            media.addEventListener('error', onReady, { once: true })
+            // Also try right now in case layout already gave it a size.
+            applySmallMediaSkip(media)
+        }
+        return
+    }
+    // Videos and canvases: use rendered size only.
+    applySmallMediaSkip(media)
+}
+
 function processNode(node) {
     if (!node || node.nodeType !== 1) return
     if (processed.has(node)) return
     if (!node.isConnected) return
+    if (!node.tagName) return
+
+    const tag = node.tagName.toLowerCase()
+
+    // Media tags get a separate, lightweight pass: we only need to decide
+    // whether to skip the e-ink filter, not rewrite their backgrounds.
+    if (tag === 'img' || tag === 'video' || tag === 'canvas') {
+        processed.add(node)
+        processMedia(node)
+        return
+    }
+
     if (ignoreTag(node)) return
     processed.add(node)
 
     const style = window.getComputedStyle(node)
-    const tag = node.tagName.toLowerCase()
 
     // Aggressive background normalization: convert any opaque, non-near-white
     // background to white. This catches saturated highlight colors (deep
@@ -237,12 +333,41 @@ function enqueueSubtree(root) {
 }
 
 function ensureStyleInjected() {
-    if (document.getElementById(STYLE_ID)) return
-    const style = document.createElement('style')
-    style.id = STYLE_ID
-    style.textContent = STATIC_CSS
-    const target = document.head || document.documentElement
-    if (target) target.appendChild(style)
+    if (!document.getElementById(STYLE_ID)) {
+        const style = document.createElement('style')
+        style.id = STYLE_ID
+        style.textContent = STATIC_CSS
+        const target = document.head || document.documentElement
+        if (target) target.appendChild(style)
+    }
+    ensureSvgFilterInjected()
+}
+
+function ensureSvgFilterInjected() {
+    // Only attach to <body>. Attaching to <html> directly (as a sibling of
+    // <head>) is invalid HTML and can interfere with the page's
+    // render-blocking expectations (e.g. <link rel="expect">), so we wait
+    // until the body is available.
+    if (!document.body) {
+        document.addEventListener('DOMContentLoaded', ensureSvgFilterInjected, { once: true })
+        return
+    }
+    let wrapper = document.getElementById(SVG_WRAPPER_ID)
+    if (!wrapper) {
+        wrapper = document.createElement('div')
+        wrapper.id = SVG_WRAPPER_ID
+        wrapper.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none'
+        wrapper.setAttribute('aria-hidden', 'true')
+        document.body.appendChild(wrapper)
+    }
+    wrapper.innerHTML = buildSvgFilterMarkup(currentImageFilter)
+}
+
+// Re-evaluate the small-image skip class on every media element, used
+// after the user changes smallThreshold so existing imgs respond live.
+function rebalanceSmallMediaSkip() {
+    const all = document.querySelectorAll('img, video, canvas')
+    for (let i = 0; i < all.length; i++) applySmallMediaSkip(all[i])
 }
 
 let observer = null
@@ -278,6 +403,7 @@ function activate() {
         startObserving()
     } else {
         document.addEventListener('DOMContentLoaded', () => {
+            ensureSvgFilterInjected()
             enqueueSubtree(document.body)
             startObserving()
         }, { once: true })
@@ -298,8 +424,18 @@ let currentlyActive = false
 async function evaluate() {
     try {
         const settings = await SiteRules.getSettings()
+        currentImageFilter = settings.imageFilter
         const next = SiteRules.shouldApply(window.location.host, settings)
-        if (next === currentlyActive) return
+        if (next === currentlyActive) {
+            // Active-state unchanged but filter params might have moved —
+            // re-render the SVG and re-balance small-image skips so live
+            // slider edits take effect without a reload.
+            if (currentlyActive) {
+                ensureSvgFilterInjected()
+                rebalanceSmallMediaSkip()
+            }
+            return
+        }
         currentlyActive = next
         if (next) activate()
         else deactivate()
@@ -316,7 +452,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
         changes[SiteRules.STORAGE_KEYS.mode] ||
         changes[SiteRules.STORAGE_KEYS.blacklist] ||
         changes[SiteRules.STORAGE_KEYS.whitelist] ||
-        changes[SiteRules.STORAGE_KEYS.globalPaused]
+        changes[SiteRules.STORAGE_KEYS.globalPaused] ||
+        changes[SiteRules.STORAGE_KEYS.imageFilter]
     ) {
         evaluate()
     }

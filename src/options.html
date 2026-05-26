@@ -25,6 +25,45 @@
         </section>
 
         <section class="card">
+            <h2>Image filter</h2>
+            <p class="hint">
+                Tweak how images, videos and canvases are rendered. Changes apply live to all open tabs.
+            </p>
+
+            <div class="slider-row">
+                <label for="filter-gamma">Brightness</label>
+                <input id="filter-gamma" type="range" min="0.4" max="1.2" step="0.01" />
+                <output id="filter-gamma-out"></output>
+                <p class="slider-hint">Lower &rarr; brighter. Lifts midtones and shadows.</p>
+            </div>
+
+            <div class="slider-row">
+                <label for="filter-brightness">Extra lift</label>
+                <input id="filter-brightness" type="range" min="0" max="0.25" step="0.01" />
+                <output id="filter-brightness-out"></output>
+                <p class="slider-hint">Adds a small flat brightness boost on top of the gamma curve.</p>
+            </div>
+
+            <div class="slider-row">
+                <label for="filter-sharpness">Sharpness</label>
+                <input id="filter-sharpness" type="range" min="0" max="0.8" step="0.01" />
+                <output id="filter-sharpness-out"></output>
+                <p class="slider-hint">Higher &rarr; crisper edges. Great for screenshots and line art.</p>
+            </div>
+
+            <div class="slider-row">
+                <label for="filter-threshold">Skip small icons</label>
+                <input id="filter-threshold" type="range" min="0" max="64" step="1" />
+                <output id="filter-threshold-out"></output>
+                <p class="slider-hint">Images this size or smaller (px) keep their original color.</p>
+            </div>
+
+            <div class="actions">
+                <button id="filter-reset" type="button">Reset to defaults</button>
+            </div>
+        </section>
+
+        <section class="card">
             <h2>Mode</h2>
             <p class="hint">Choose which list controls where ink style is applied.</p>
             <label class="radio">

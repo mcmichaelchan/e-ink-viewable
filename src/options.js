@@ -1,4 +1,20 @@
-const { MODES, STORAGE_KEYS, getSettings, setSettings, normalizePattern, migrateLegacyIfNeeded } = SiteRules
+const {
+    MODES,
+    STORAGE_KEYS,
+    getSettings,
+    setSettings,
+    setImageFilter,
+    DEFAULT_IMAGE_FILTER,
+    normalizePattern,
+    migrateLegacyIfNeeded
+} = SiteRules
+
+const SLIDERS = [
+    { key: 'gamma', input: 'filter-gamma', out: 'filter-gamma-out', fmt: (v) => v.toFixed(2) },
+    { key: 'brightness', input: 'filter-brightness', out: 'filter-brightness-out', fmt: (v) => v.toFixed(2) },
+    { key: 'sharpness', input: 'filter-sharpness', out: 'filter-sharpness-out', fmt: (v) => v.toFixed(2) },
+    { key: 'smallThreshold', input: 'filter-threshold', out: 'filter-threshold-out', fmt: (v) => `${Math.round(v)}px` }
+]
 
 let state = { mode: MODES.BLACKLIST, blacklist: [], whitelist: [] }
 
@@ -41,8 +57,22 @@ function renderMode() {
     })
 }
 
+function renderSliders() {
+    if (!state.imageFilter) return
+    SLIDERS.forEach(({ key, input, out, fmt }) => {
+        const el = document.getElementById(input)
+        const o = document.getElementById(out)
+        if (!el || !o) return
+        const v = state.imageFilter[key]
+        if (typeof v !== 'number') return
+        if (Number(el.value) !== v) el.value = String(v)
+        o.textContent = fmt(v)
+    })
+}
+
 function renderAll() {
     renderMode()
+    renderSliders()
     renderList('blacklist', state.blacklist, STORAGE_KEYS.blacklist)
     renderList('whitelist', state.whitelist, STORAGE_KEYS.whitelist)
 }
@@ -108,6 +138,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     wireAdd('blacklist-input', 'blacklist-add', STORAGE_KEYS.blacklist)
     wireAdd('whitelist-input', 'whitelist-add', STORAGE_KEYS.whitelist)
+
+    // Image filter sliders. We persist on the 'input' event so the page
+    // updates live; storage.onChanged then propagates to inject.js in
+    // every open tab without a reload.
+    let saveTimer = null
+    SLIDERS.forEach(({ key, input, out, fmt }) => {
+        const el = document.getElementById(input)
+        const o = document.getElementById(out)
+        if (!el) return
+        el.addEventListener('input', () => {
+            const v = Number(el.value)
+            if (!isFinite(v)) return
+            o.textContent = fmt(v)
+            state.imageFilter = { ...state.imageFilter, [key]: v }
+            clearTimeout(saveTimer)
+            saveTimer = setTimeout(async () => {
+                state.imageFilter = await setImageFilter({ [key]: v })
+                flashSaved()
+            }, 120)
+        })
+    })
+
+    const resetBtn = document.getElementById('filter-reset')
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            state.imageFilter = await setImageFilter(DEFAULT_IMAGE_FILTER)
+            renderSliders()
+            flashSaved()
+        })
+    }
 
     const openShortcuts = document.getElementById('open-shortcuts')
     if (openShortcuts) {

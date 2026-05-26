@@ -122,6 +122,51 @@ button:hover {
     font-family: inherit;
 }
 
+.slider-row {
+    display: grid;
+    grid-template-columns: 130px 1fr 60px;
+    grid-template-rows: auto auto;
+    column-gap: 12px;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.slider-row label {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.slider-row input[type="range"] {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    accent-color: #000;
+}
+
+.slider-row output {
+    grid-column: 3;
+    grid-row: 1;
+    text-align: right;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+}
+
+.slider-hint {
+    grid-column: 1 / 4;
+    grid-row: 2;
+    margin: 2px 0 0 0;
+    font-size: 11px;
+    color: #666;
+}
+
+.actions {
+    margin-top: 8px;
+    display: flex;
+    justify-content: flex-end;
+}
+
 .saved {
     text-align: right;
     color: #060;

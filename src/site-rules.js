@@ -9,7 +9,35 @@
         blacklist: 'blacklist',
         whitelist: 'whitelist',
         globalPaused: 'globalPaused',
+        imageFilter: 'imageFilter',
         migrated: 'legacyMigrated'
+    }
+
+    // Defaults for the SVG image filter chain (see inject.js).
+    //   gamma         < 1 brightens midtones, > 1 darkens.
+    //   brightness    additive offset on each channel (0..0.2).
+    //   sharpness     unsharp-mask kernel side weight (0..0.8).
+    //   smallThreshold images <= this size keep original color (px).
+    const DEFAULT_IMAGE_FILTER = {
+        gamma: 0.75,
+        brightness: 0.05,
+        sharpness: 0.3,
+        smallThreshold: 24
+    }
+
+    function sanitizeImageFilter(raw) {
+        const f = { ...DEFAULT_IMAGE_FILTER, ...(raw || {}) }
+        const clamp = (v, lo, hi, fallback) => {
+            const n = Number(v)
+            if (!isFinite(n)) return fallback
+            return Math.min(hi, Math.max(lo, n))
+        }
+        return {
+            gamma: clamp(f.gamma, 0.4, 1.5, DEFAULT_IMAGE_FILTER.gamma),
+            brightness: clamp(f.brightness, 0, 0.3, DEFAULT_IMAGE_FILTER.brightness),
+            sharpness: clamp(f.sharpness, 0, 1, DEFAULT_IMAGE_FILTER.sharpness),
+            smallThreshold: Math.round(clamp(f.smallThreshold, 0, 128, DEFAULT_IMAGE_FILTER.smallThreshold))
+        }
     }
 
     const MODES = { BLACKLIST: 'blacklist', WHITELIST: 'whitelist' }
@@ -94,7 +122,8 @@
                     STORAGE_KEYS.mode,
                     STORAGE_KEYS.blacklist,
                     STORAGE_KEYS.whitelist,
-                    STORAGE_KEYS.globalPaused
+                    STORAGE_KEYS.globalPaused,
+                    STORAGE_KEYS.imageFilter
                 ],
                 (items) => {
                     resolve({
@@ -107,11 +136,19 @@
                         whitelist: Array.isArray(items[STORAGE_KEYS.whitelist])
                             ? items[STORAGE_KEYS.whitelist]
                             : [],
-                        globalPaused: !!items[STORAGE_KEYS.globalPaused]
+                        globalPaused: !!items[STORAGE_KEYS.globalPaused],
+                        imageFilter: sanitizeImageFilter(items[STORAGE_KEYS.imageFilter])
                     })
                 }
             )
         })
+    }
+
+    async function setImageFilter(partial) {
+        const settings = await getSettings()
+        const next = sanitizeImageFilter({ ...settings.imageFilter, ...partial })
+        await setSettings({ [STORAGE_KEYS.imageFilter]: next })
+        return next
     }
 
     async function toggleGlobalPause() {
@@ -235,6 +272,9 @@
         shouldApply,
         toggleHost,
         toggleGlobalPause,
+        setImageFilter,
+        sanitizeImageFilter,
+        DEFAULT_IMAGE_FILTER,
         addPatternToActiveList,
         getMainDomain,
         isIpAddress,
