@@ -9,11 +9,31 @@
 
 <body>
     <div id="app">
-        <button type="button" id="toggle">
-        </button>
-        <a href="#" id="shortcuts">Configure shortcuts</a>
+        <div id="global-banner" class="banner" hidden>
+            Globally paused. Ink style is off everywhere.
+        </div>
+
+        <div id="host" class="host"></div>
+        <div id="status" class="status"></div>
+        <button type="button" id="toggle"></button>
+        <button type="button" id="add-domain" class="secondary"></button>
+
+        <div class="mode-row">
+            <span>Mode:</span>
+            <strong id="mode-label"></strong>
+        </div>
+
+        <div class="divider"></div>
+
+        <button type="button" id="global-toggle" class="secondary"></button>
+
+        <div class="links">
+            <a href="#" id="manage">Manage white/black list</a>
+            <a href="#" id="shortcuts">Configure shortcuts</a>
+        </div>
     </div>
-    <script src="jquery.js"></script>
+    <script src="site-rules.js"></script>
     <script src="popup.js"></script>
 </body>
+
 </html>

@@ -1,9 +1,115 @@
+// Content script: applies an "e-ink" friendly style.
+//
+// Design:
+//   - All visual rules live in an injected <style> scoped under
+//     html.eink-viewable-on, so toggling the effect is just a class flip
+//     (no page reload required).
+//   - JS only handles the dynamic bits that need computed-style inspection:
+//     dark backgrounds, gradients, light borders. Those nodes are tagged
+//     with marker classes; the actual styling still comes from CSS.
+//   - Each node is processed at most once (WeakSet). Mutations are
+//     batched via requestIdleCallback to avoid blocking the main thread.
 
-function parseRgbString(rgb) {
-    return rgb.replace(/[^\d,]/g, '').split(',')
+const HTML_CLASS = 'eink-viewable-on'
+const STYLE_ID = 'eink-viewable-style'
+const FIX_BG_CLASS = 'eink-viewable-fix-bg'
+const FIX_BORDER_CLASS = 'eink-viewable-fix-border'
+const SVG_CLASS = 'eink-viewable-svg'
+
+const STATIC_CSS = `
+html.${HTML_CLASS},
+html.${HTML_CLASS} body {
+    background: #fff !important;
+    color: #000 !important;
 }
 
-//http://www.w3.org/TR/AERT#color-contrast
+/* Force every element + pseudo to render text in solid black. We have to
+   set -webkit-text-fill-color (used by gradient text), text-decoration
+   color, and caret color in addition to the regular color property. */
+html.${HTML_CLASS} *,
+html.${HTML_CLASS} *::before,
+html.${HTML_CLASS} *::after,
+html.${HTML_CLASS} *::placeholder,
+html.${HTML_CLASS} *::first-letter,
+html.${HTML_CLASS} *::first-line {
+    color: #000 !important;
+    -webkit-text-fill-color: #000 !important;
+    text-decoration-color: #000 !important;
+    caret-color: #000 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+}
+
+/* Defeat gradient-text patterns: many sites use
+   background: linear-gradient(...); -webkit-background-clip: text; color: transparent;
+   Reset the clip so the text becomes solid (and our color rule wins). */
+html.${HTML_CLASS} * {
+    -webkit-background-clip: border-box !important;
+    background-clip: border-box !important;
+}
+
+/* SVG fills / strokes — applies to <svg> AND every descendant so icons
+   that hard-code fill="white" or fill: var(--brand) still render black. */
+html.${HTML_CLASS} svg,
+html.${HTML_CLASS} svg *,
+html.${HTML_CLASS} .${SVG_CLASS},
+html.${HTML_CLASS} .${SVG_CLASS} * {
+    fill: currentColor !important;
+    stroke: currentColor !important;
+}
+
+/* Re-enable a desaturating filter for raster media. The universal
+   filter:none above is overridden by these more-targeted selectors
+   appearing later in source order. */
+html.${HTML_CLASS} img,
+html.${HTML_CLASS} video,
+html.${HTML_CLASS} canvas,
+html.${HTML_CLASS} picture,
+html.${HTML_CLASS} svg image {
+    filter: grayscale(100%) contrast(1.05) !important;
+}
+
+html.${HTML_CLASS} .${FIX_BG_CLASS} {
+    background-color: #fff !important;
+    background-image: none !important;
+}
+html.${HTML_CLASS} pre.${FIX_BG_CLASS} {
+    border: 1px solid #000 !important;
+}
+html.${HTML_CLASS} .${FIX_BORDER_CLASS} {
+    border-color: #000 !important;
+}
+
+/* <mark> highlights: a white bg + black text loses its purpose, so give
+   it an underline instead. */
+html.${HTML_CLASS} mark {
+    background: #fff !important;
+    color: #000 !important;
+    border-bottom: 2px solid #000 !important;
+    padding: 0 1px !important;
+}
+
+/* Form controls often have OS-level styles that ignore our overrides. */
+html.${HTML_CLASS} input,
+html.${HTML_CLASS} textarea,
+html.${HTML_CLASS} select,
+html.${HTML_CLASS} button {
+    background-color: #fff !important;
+    color: #000 !important;
+    -webkit-text-fill-color: #000 !important;
+}
+html.${HTML_CLASS} input::placeholder,
+html.${HTML_CLASS} textarea::placeholder {
+    color: #555 !important;
+    -webkit-text-fill-color: #555 !important;
+}
+`
+
+function parseRgbString(rgb) {
+    return rgb.replace(/[^\d,.]/g, '').split(',')
+}
+
 function getBrightness(color) {
     const c = parseRgbString(color)
     return (c[0] * 299 + c[1] * 587 + c[2] * 114) / 1000
@@ -13,96 +119,211 @@ function isDark(color) {
     return getBrightness(color) < 128
 }
 
-const ignoreTagNames = ['html', 'head', 'script', 'style', 'link', 'meta', 'title', 'img', 'video', 'audio']
+const ignoreTagNames = new Set([
+    'html', 'head', 'script', 'style', 'link', 'meta', 'title',
+    'img', 'video', 'audio', 'picture', 'canvas', 'iframe'
+])
 
 function ignoreTag(node) {
-    if (!node.tagName) {
-        return true
-    }
-
+    if (!node || node.nodeType !== 1 || !node.tagName) return true
     const tag = node.tagName.toLowerCase()
-
-    if (ignoreTagNames.includes(tag)) {
-        return true
-    }
-
-    // ignore custom tags which contain video, audio, img...
-    if (['video', 'audio', 'img'].some(it => tag.includes(it))) {
-        return true
-    }
-
-    if (tag === 'input' && ['checkbox', 'radio'].includes(node.type)) {
-        return true
-    }
-
+    if (ignoreTagNames.has(tag)) return true
+    if (tag.includes('-') && /(video|audio|img|player|canvas)/.test(tag)) return true
+    if (tag === 'input' && (node.type === 'checkbox' || node.type === 'radio')) return true
     return false
 }
 
-function updateStyle(node) {
-    if (ignoreTag(node)) {
-        return
-    }
+const processed = new WeakSet()
+
+function processNode(node) {
+    if (!node || node.nodeType !== 1) return
+    if (processed.has(node)) return
+    if (!node.isConnected) return
+    if (ignoreTag(node)) return
+    processed.add(node)
 
     const style = window.getComputedStyle(node)
     const tag = node.tagName.toLowerCase()
 
-    const backgroundColor = style.backgroundColor
-    if (backgroundColor && backgroundColor !== 'transparent' && backgroundColor !== 'rgb(255, 255, 255)' && backgroundColor !== 'rgba(0, 0, 0, 0)') {
-        const alpha = parseFloat(backgroundColor.split(',')[3])
-        if (!isNaN(alpha) && alpha < 0.5) {
-            // ignore this
-        } else if (node.textContent.trim() || tag === 'input' || isDark(backgroundColor)) { // has text content
-            node.style.setProperty('background-color', '#fff', 'important')
-            // add border for code block
-            if (tag === 'pre' && node.className.trim() !== 'CodeMirror-line') {
-                node.style.setProperty('border', '1px solid #000', 'important')
+    // Aggressive background normalization: convert any opaque, non-near-white
+    // background to white. This catches saturated highlight colors (deep
+    // reds, brand blues, etc.) whose brightness happens to land above the
+    // old isDark() threshold but still looks dark on greyscale e-ink.
+    let needBgFix = false
+    const bg = style.backgroundColor
+    if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+        const c = parseRgbString(bg)
+        const alpha = isNaN(parseFloat(c[3])) ? 1 : parseFloat(c[3])
+        if (alpha >= 0.3) {
+            const brightness = getBrightness(bg)
+            // Anything not visually "almost white" gets flattened.
+            if (brightness < 240) {
+                needBgFix = true
             }
         }
     }
 
-    if (style.background.indexOf('linear-gradient') !== -1) {   // remove linear gradient
-        node.style.setProperty('background', '#fff', 'important')
-    }
-
-    node.style.setProperty('color', '#000', 'important')
-
-    const borderColor = style.borderColor
-    if (borderColor && borderColor !== 'rgb(0, 0, 0)') {
-        if (!isDark(borderColor)) { // too light
-            node.style.setProperty('border-color', '#000', 'important')
+    const bgImage = style.backgroundImage
+    if (bgImage && bgImage !== 'none') {
+        // Any kind of gradient or image background risks dark patches.
+        if (
+            bgImage.includes('gradient') ||
+            bgImage.includes('url(')
+        ) {
+            // Don't flatten background images on tags that rely on them
+            // for icons (often <i>, <span> with explicit width/height
+            // and no text). Only flatten if the element has children or
+            // text — i.e. it's a content container, not an icon.
+            const hasContent = node.textContent && node.textContent.trim().length > 0
+            if (hasContent || bgImage.includes('gradient')) {
+                needBgFix = true
+            }
         }
     }
 
-    if (tag === 'svg') {
-        node.style.setProperty('fill', 'currentColor', 'important')
+    if (needBgFix) node.classList.add(FIX_BG_CLASS)
+
+    const borderColor = style.borderColor
+    if (borderColor && borderColor !== 'rgb(0, 0, 0)' && !isDark(borderColor)) {
+        const borderWidth = parseFloat(style.borderTopWidth) +
+            parseFloat(style.borderRightWidth) +
+            parseFloat(style.borderBottomWidth) +
+            parseFloat(style.borderLeftWidth)
+        if (borderWidth > 0) node.classList.add(FIX_BORDER_CLASS)
     }
 }
 
-chrome.storage.sync.get([`i:${window.location.host}`], function (items) {
-    let paused = items[`i:${window.location.host}`]
-    if (!paused) {
-        document.querySelectorAll('*').forEach((node) => {
-            updateStyle(node)
-        })
+// Batched, idle-scheduled processing queue.
+let pending = []
+let scheduled = false
+const SCHEDULER = (typeof requestIdleCallback === 'function')
+    ? (cb) => requestIdleCallback(cb, { timeout: 250 })
+    : (cb) => setTimeout(cb, 16)
 
-        const observer = new MutationObserver((mutationList) => {
-            for (const mutation of mutationList) {
-                if (mutation.target) {
-                    updateStyle(mutation.target)
-                    mutation.target.childNodes.forEach((node) => {
-                        updateStyle(node)
-                    })
-                }
+function flush() {
+    scheduled = false
+    const start = performance.now()
+    const queue = pending
+    pending = []
+    for (let i = 0; i < queue.length; i++) {
+        processNode(queue[i])
+        // Yield if we've been processing too long; reschedule the rest.
+        if ((i & 0xff) === 0xff && performance.now() - start > 8) {
+            pending = pending.concat(queue.slice(i + 1))
+            schedule()
+            return
+        }
+    }
+}
+
+function schedule() {
+    if (scheduled) return
+    scheduled = true
+    SCHEDULER(flush)
+}
+
+function enqueue(node) {
+    if (!node || node.nodeType !== 1) return
+    if (processed.has(node)) return
+    pending.push(node)
+    schedule()
+}
+
+function enqueueSubtree(root) {
+    enqueue(root)
+    if (root.nodeType !== 1 || !root.querySelectorAll) return
+    const all = root.querySelectorAll('*')
+    for (let i = 0; i < all.length; i++) enqueue(all[i])
+}
+
+function ensureStyleInjected() {
+    if (document.getElementById(STYLE_ID)) return
+    const style = document.createElement('style')
+    style.id = STYLE_ID
+    style.textContent = STATIC_CSS
+    const target = document.head || document.documentElement
+    if (target) target.appendChild(style)
+}
+
+let observer = null
+
+function startObserving() {
+    if (observer || !document.body) return
+    // Only watch childList - attribute changes used to trigger an entire
+    // subtree rewalk in the old code, which caused noticeable jank on SPAs.
+    // Newly inserted nodes are picked up via childList + subtree.
+    observer = new MutationObserver((list) => {
+        for (let i = 0; i < list.length; i++) {
+            const m = list[i]
+            const added = m.addedNodes
+            for (let j = 0; j < added.length; j++) {
+                enqueueSubtree(added[j])
             }
-        })
+        }
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+}
 
-        observer.observe(document.getElementsByTagName('body')[0], { attributes: true, childList: true, subtree: true })
+function stopObserving() {
+    if (!observer) return
+    observer.disconnect()
+    observer = null
+}
+
+function activate() {
+    ensureStyleInjected()
+    document.documentElement.classList.add(HTML_CLASS)
+    if (document.body) {
+        enqueueSubtree(document.body)
+        startObserving()
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            enqueueSubtree(document.body)
+            startObserving()
+        }, { once: true })
+    }
+}
+
+function deactivate() {
+    document.documentElement.classList.remove(HTML_CLASS)
+    stopObserving()
+    pending = []
+    // We deliberately leave marker classes on nodes: they're harmless when
+    // the html.${HTML_CLASS} ancestor selector no longer matches, and
+    // re-activating will be cheap because the WeakSet is still warm.
+}
+
+let currentlyActive = false
+
+async function evaluate() {
+    try {
+        const settings = await SiteRules.getSettings()
+        const next = SiteRules.shouldApply(window.location.host, settings)
+        if (next === currentlyActive) return
+        currentlyActive = next
+        if (next) activate()
+        else deactivate()
+    } catch (e) {
+        // storage may be unavailable on some restricted pages
+    }
+}
+
+evaluate()
+
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'sync') return
+    if (
+        changes[SiteRules.STORAGE_KEYS.mode] ||
+        changes[SiteRules.STORAGE_KEYS.blacklist] ||
+        changes[SiteRules.STORAGE_KEYS.whitelist] ||
+        changes[SiteRules.STORAGE_KEYS.globalPaused]
+    ) {
+        evaluate()
     }
 })
 
-chrome.runtime.onMessage.addListener(function (request) {
-    if (request === 'reload') {
-        window.location.reload()
-    }
+// Legacy reload handler kept for backwards-compat with older popup builds.
+chrome.runtime.onMessage.addListener((request) => {
+    if (request === 'reload') evaluate()
     return true
 })

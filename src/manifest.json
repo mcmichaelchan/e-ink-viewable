@@ -11,6 +11,10 @@
     "default_title": "E-ink Viewable",
     "default_popup": "popup.html"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "background.js"
   },
@@ -19,7 +23,19 @@
       "suggested_key": {
         "default": "Ctrl+Shift+X"
       },
-      "description": "Toggle ink style"
+      "description": "Toggle ink style for current host"
+    },
+    "add-current-domain": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+D"
+      },
+      "description": "Add current site's main domain to the active list"
+    },
+    "toggle-global-pause": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+P"
+      },
+      "description": "Globally pause / resume ink style"
     }
   },
   "content_scripts": [
@@ -28,11 +44,14 @@
         "*://*/*"
       ],
       "js": [
+        "site-rules.js",
         "inject.js"
       ],
       "css": [
         "css/base.css"
-      ]
+      ],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "permissions": [

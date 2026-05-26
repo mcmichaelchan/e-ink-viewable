@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>E-ink Viewable - Settings</title>
+    <link rel="stylesheet" href="css/options.css" />
+</head>
+
+<body>
+    <main>
+        <h1>E-ink Viewable Settings</h1>
+
+        <section class="card">
+            <h2>Shortcuts</h2>
+            <p class="hint">
+                <kbd>Ctrl+Shift+X</kbd> &mdash; toggle ink style for the current host.<br />
+                <kbd>Ctrl+Shift+D</kbd> &mdash; add the current page's <strong>main domain</strong>
+                (e.g. <code>*.example.com</code>) to whichever list is currently active.<br />
+                <kbd>Ctrl+Shift+P</kbd> &mdash; pause / resume ink style globally
+                (overrides white &amp; black lists everywhere).<br />
+                Customise these on
+                <a href="#" id="open-shortcuts">chrome://extensions/shortcuts</a>.
+            </p>
+        </section>
+
+        <section class="card">
+            <h2>Mode</h2>
+            <p class="hint">Choose which list controls where ink style is applied.</p>
+            <label class="radio">
+                <input type="radio" name="mode" value="blacklist" />
+                <span>
+                    <strong>Blacklist</strong>
+                    <em>Apply ink style to all sites except those in the blacklist.</em>
+                </span>
+            </label>
+            <label class="radio">
+                <input type="radio" name="mode" value="whitelist" />
+                <span>
+                    <strong>Whitelist</strong>
+                    <em>Only apply ink style to sites in the whitelist.</em>
+                </span>
+            </label>
+        </section>
+
+        <section class="card">
+            <h2>Blacklist</h2>
+            <p class="hint">
+                Hosts to <strong>exclude</strong> when in blacklist mode.
+                Use <code>example.com</code> for an exact host, or
+                <code>*.example.com</code> to match all subdomains.
+            </p>
+            <div class="add-row">
+                <input id="blacklist-input" type="text" placeholder="example.com or *.example.com" />
+                <button id="blacklist-add" type="button">Add</button>
+            </div>
+            <ul id="blacklist" class="rules"></ul>
+        </section>
+
+        <section class="card">
+            <h2>Whitelist</h2>
+            <p class="hint">
+                Hosts to <strong>include</strong> when in whitelist mode.
+            </p>
+            <div class="add-row">
+                <input id="whitelist-input" type="text" placeholder="example.com or *.example.com" />
+                <button id="whitelist-add" type="button">Add</button>
+            </div>
+            <ul id="whitelist" class="rules"></ul>
+        </section>
+
+        <p id="saved" class="saved" aria-live="polite"></p>
+    </main>
+
+    <script src="site-rules.js"></script>
+    <script src="options.js"></script>
+</body>
+
+</html>
